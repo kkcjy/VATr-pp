@@ -491,17 +491,14 @@ def add_vatr_args(parser):
     parser.add_argument("--dataset", default='IAM', type=str)
     parser.add_argument("--english_words_path", default='files/english_words.txt', type=str)
     parser.add_argument("--wandb", action='store_true')
-
     parser.add_argument("--no_writer_loss", action='store_true')
     parser.add_argument("--writer_loss_weight", type=float, default=1.0)
     parser.add_argument("--no_ocr_loss", action='store_true')
-
     parser.add_argument("--img_height", default=32, type=int)
     parser.add_argument("--resolution", default=16, type=int)
     parser.add_argument("--batch_size", default=8, type=int)
     parser.add_argument("--num_examples", default=15, type=int)
     parser.add_argument("--num_writers", default=339, type=int)
-
     parser.add_argument("--alphabet",
                         default='Only thewigsofrcvdampbkuq.A-210xT5\'MDL,RYHJ"ISPWENj&BC93VGFKz();#:!7U64Q8?+*ZX/%',
                         type=str)
@@ -511,7 +508,6 @@ def add_vatr_args(parser):
     parser.add_argument("--w_lr", default=0.00005, type=float)
     parser.add_argument("--ocr_lr", default=0.00005, type=float)
     parser.add_argument("--epochs", default=100_000, type=int)
-
     parser.add_argument("--num_workers", default=0, type=int)
     parser.add_argument("--seed", default=742, type=int)
     parser.add_argument("--num_words", default=3, type=int)
@@ -522,12 +518,10 @@ def add_vatr_args(parser):
     parser.add_argument("--tag", default='debug', type=str)
     parser.add_argument("--device", default='cuda' if torch.cuda.is_available() else 'cpu', type=str)
     parser.add_argument("--query_input", default='unifont', type=str)
-
     parser.add_argument("--corpus", default="standard", type=str)
     parser.add_argument("--text-augment-strength", default=0.0, type=float)
     parser.add_argument("--text-aug-type", type=str, default="proportional")
     parser.add_argument("--file-suffix", type=str, default=None)
-
     parser.add_argument("--augment-ocr", action="store_true")
     parser.add_argument("--d-crop-size", type=int, nargs='*')
 

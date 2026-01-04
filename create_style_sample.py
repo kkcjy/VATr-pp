@@ -7,7 +7,6 @@ from util.vision import get_page, get_words
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-
     parser.add_argument("--input-image", type=str, required=True)
     parser.add_argument("--output-folder", type=str, required=True, default='files/style_samples/00')
 

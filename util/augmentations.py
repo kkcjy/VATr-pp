@@ -16,7 +16,6 @@ from data.dataset import CollectionTextDataset, TextDataset
 
 def to_cv2(batch: torch.Tensor):
     imgs = []
-
     for img in batch:
         img = img.detach().cpu().numpy()
         img = (img + 1.0) / 2.0
@@ -35,11 +34,8 @@ class RandMorph(torch.nn.Module):
 
     def forward(self, x):
         dev = x.device
-
         imgs = to_cv2(x)
-
         res = []
-
         sz = random.randint(1, self.max_sz)
         kernel = cv2.getStructuringElement(random.choice(self.elems), (sz, sz))
 
@@ -48,7 +44,6 @@ class RandMorph(torch.nn.Module):
             morph = cv2.morphologyEx(img, op=self.op, kernel=kernel, iterations=random.randint(1, self.max_iter))
             morph = cv2.resize(morph, (img.shape[1] // 2, img.shape[0] // 2))
             morph = morph * 2.0 - 1.0
-
             res.append(torch.Tensor(morph))
 
         return torch.unsqueeze(torch.stack(res).to(dev), dim=1)
@@ -59,11 +54,8 @@ def gauss_noise(img):
     dtype = img.dtype
     if not img.is_floating_point():
         img = img.to(torch.float32)
-
     sigma = 0.075
-
     out = img + sigma * (torch.randn_like(img) - 0.5)
-
     out = torch.clamp(out, -1.0, 1.0)
 
     if out.dtype != dtype:
@@ -75,14 +67,12 @@ def gauss_noise(img):
 def word_w(img: torch.Tensor) -> int:
     idxs = torch.where((img < 0).int())[2]
     idx = torch.max(idxs) if len(idxs) > 0 else img.size(-1)
-
     return idx
 
 
 class Down(torch.nn.Module):
     def __init__(self):
         super().__init__()
-
         self.aug = torchvision.transforms.Compose([
             torchvision.transforms.RandomAffine(0.0, scale=(0.8, 1.0), interpolation=torchvision.transforms.InterpolationMode.NEAREST, fill=1.0),
             torchvision.transforms.GaussianBlur(3, sigma=0.3)
@@ -176,7 +166,6 @@ class RandCrop(WordCrop):
 
         self.min_w = min_w
         self.max_w = max_w
-
         self.curr_w_val = random.randint(self.min_w, self.max_w)
 
     def update(self, epoch: int):
@@ -199,16 +188,13 @@ class FullCrop(torch.nn.Module):
     def forward(self, imgs):
         assert len(imgs.size()) == 4 and imgs.size(1) == 1, "Augmentation works on batches of one channel images"
         imgs = self.pad(imgs)
-
         res = []
 
         for img in imgs:
             idx = word_w(img)
             max_idx = max(min(idx - self.w // 2, img.size(2) - self.w), 0)
-
             start_w = random.randint(0, max_idx)
             start_h = random.randint(0, img.size(1) - self.h)
-
             res.append(F.crop(img, start_h, start_w, self.h, min(self.w, img.size(2))))
 
         return torch.stack(res)
@@ -267,17 +253,14 @@ def show_crops():
     for auth in data['train'].keys():
         for img in data['train'][auth]:
             img = torch.Tensor(np.expand_dims(np.expand_dims(np.array(img['img']), 0), 0))
-
             aug = torchvision.transforms.Compose([
                 ResizeH(32),
                 FullCrop(128)
             ])
 
             batch = aug(img)
-
             batch = batch.detach().cpu().numpy()
             res = [np.squeeze(im) for im in batch]
-
             f, ax = plt.subplots(1, len(res))
 
             for i in range(len(res)):
@@ -308,11 +291,8 @@ if __name__ == "__main__":
     for batch in loader:
         for i in range(5):
             auged = aug(batch["img"])
-
             img = np.squeeze((auged[0].detach().cpu().numpy() + 1.0) / 2.0)
-
             img = (img * 255.0).astype(np.uint8)
-
             print(cv2.imwrite(os.path.join(out_dir, f"{img_cnt}_{i}.png"), img))
 
         img = np.squeeze((batch["img"][0].detach().cpu().numpy() + 1.0) / 2.0)

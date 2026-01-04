@@ -119,16 +119,12 @@ def main():
         for i, data in enumerate(train_loader):
             model.update_parameters(epoch)
             model._set_input(data)
-
             model.optimize_G_only()
             model.optimize_G_step()
-
             model.optimize_D_OCR()
             model.optimize_D_OCR_step()
-
             model.optimize_G_WL()
             model.optimize_G_step()
-
             model.optimize_D_WL()
             model.optimize_D_WL_step()
 

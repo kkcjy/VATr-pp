@@ -15,13 +15,11 @@ def detect_text_bounds(img: np.array) -> (int, int):
 
     sums = np.sum(thresh, axis=1).astype(float)
     sums = np.convolve(sums, np.ones(5) / 5, mode='same')
-
     sums_d = np.diff(sums)
 
     std_factor = 0.5
     min_th = np.mean(sums_d[sums_d <= 0]) - std_factor * np.std(sums_d[sums_d <= 0])
     bot_idx = np.max(np.where(sums_d < min_th))
-
     max_th = np.mean(sums_d[sums_d >= 0]) + std_factor * np.std(sums_d[sums_d >= 0])
     top_idx = np.min(np.where(sums_d > max_th))
 
@@ -51,7 +49,6 @@ def find_target_points(tl, tr, bl, br):
     max_w = max(int(dist(br, bl)), int(dist(tr, tl)))
     max_h = max(int(dist(tr, br)), int(dist(tl, bl)))
     dst_corners = [[0, 0], [max_w, 0], [max_w, max_h], [0, max_h]]
-
     return order_points(dst_corners)
 
 
@@ -109,10 +106,8 @@ def get_words(page: np.array, dil_size: int = 3):
     _, thresh = cv2.threshold(gray, 125, 1, cv2.THRESH_BINARY_INV)
 
     dil_size = dil_size
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dil_size + 1, 2 * dil_size + 1),
-                                       (dil_size, dil_size))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dil_size + 1, 2 * dil_size + 1), (dil_size, dil_size))
     thresh = cv2.dilate(thresh, kernel, iterations=3)
-
     cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     words = []

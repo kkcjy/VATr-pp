@@ -6,7 +6,6 @@ from util.misc import add_vatr_args
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=['text', 'fid', 'page', 'authors', 'ocr'])
-
     parser.add_argument("-s", "--style-folder", default='files/style_samples/00', type=str)
     parser.add_argument("-t", "--text", default='That\'s one small step for man, one giant leap for mankind ΑαΒβΓγΔδ', type=str)
     parser.add_argument("--text-path", default=None, type=str, help='Path to text file with texts to generate')
@@ -20,7 +19,6 @@ if __name__ == '__main__':
     parser.add_argument("--target-dataset-path", type=str, default=None)
     parser.add_argument("--charset-file", type=str, default=None)
     parser.add_argument("--interp-styles", action='store_true')
-
     parser.add_argument("--test-only", action='store_true')
     parser.add_argument("--fake-only", action='store_true')
     parser.add_argument("--all-epochs", action='store_true')
@@ -28,7 +26,6 @@ if __name__ == '__main__':
     parser.add_argument("--msgpack", action='store_true')
     parser.add_argument("--reference", action='store_true')
     parser.add_argument("--test-set", action='store_true')
-
     parser = add_vatr_args(parser)
     args = parser.parse_args()
     
