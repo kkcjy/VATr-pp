@@ -82,6 +82,63 @@ class ProportionalAugmentedGenerator(AugmentedGenerator):
         return word
 
 
+# p = α · n/T  ===>  p′ = min(β, p^γ), γ > 1, beta = mean(p)^γ
+class NonlinearProbabilityAugmentedGenerator(AugmentedGenerator):
+    def __init__(self, max_length: int, generator: TextGenerator, alphabet: list, strength: float = 0.5, gamma: float = 2.0):
+        super().__init__(strength, alphabet, max_length)
+        self.generator = generator
+        self.gamma = gamma
+
+        self.char_stats = {}
+        self.sampling_probs = {}
+        self.init_statistics()
+
+    def init_statistics(self):
+        # 统计字符出现次数
+        char_occurrences = {k: 0 for k in self.alphabet}
+        character_count = 0
+
+        for _ in range(10000):
+            word = self.generator.generate()
+            for char in word:
+                if char in char_occurrences:
+                    char_occurrences[char] += 1
+                    character_count += 1
+
+        # 线性频率
+        freqs = np.array([v / character_count for v in char_occurrences.values()])
+        keys = list(char_occurrences.keys())
+
+        # 计算幂函数增强概率
+        p_mean = freqs.mean()
+        beta = p_mean ** self.gamma
+
+        augmented_probs = np.minimum(beta, freqs ** self.gamma)
+
+        self.char_stats = dict(zip(keys, augmented_probs))
+        # 选择罕见字符
+        self.sampling_probs = {k: 1.0 - v for k, v in self.char_stats.items()}
+
+    def random_char(self):
+        return random.choices(list(self.sampling_probs.keys()), weights=list(self.sampling_probs.values()), k=1)[0]
+
+    def generate(self):
+        word = self.generator.generate()
+        word = self.augment(word)
+        return word
+
+    def augment(self, word):
+        probs = np.random.rand(len(word))
+        target_probs = [self.strength * self.char_stats.get(c, 0) for c in word]
+        replace = probs < target_probs
+
+        for index in range(len(word)):
+            if replace[index]:
+                char = self.random_char()
+                word = set_char(word, char, index)
+        return word
+
+
 class FileTextGenerator(TextGenerator):
     def __init__(self, max_length: int, file_path: str, alphabet: list):
         super().__init__(max_length)
@@ -172,11 +229,11 @@ def get_generator(args):
 
     if args.text_augment_strength > 0:
         if args.text_aug_type == 'proportional':
-            return ProportionalAugmentedGenerator(20, generator, args.alphabet, args.text_augment_strength)
+            return NonlinearProbabilityAugmentedGenerator(20, generator, args.alphabet, args.text_augment_strength)
         elif args.text_aug_type == 'gibberish':
             return GibberishGenerator(20)
         else:
-            return ProportionalAugmentedGenerator(20, generator, args.alphabet, args.text_augment_strength)
+            return NonlinearProbabilityAugmentedGenerator(20, generator, args.alphabet, args.text_augment_strength)
 
     return generator
 
@@ -184,7 +241,7 @@ def get_generator(args):
 if __name__ == "__main__":
     alphabet = list('Only thewigsofrcvdampbkuq.A-210xT5\'MDL,RYHJ"ISPWENj&BC93VGFKz();#:!7U64Q8?+*ZX/%')
     original_generator = FileTextGenerator(max_length=20, file_path="../files/english_words.txt", alphabet=alphabet)
-    gib = ProportionalAugmentedGenerator(20, original_generator, alphabet=alphabet, strength=0.5)
+    gib = NonlinearProbabilityAugmentedGenerator(20, original_generator, alphabet=alphabet, strength=0.5)
 
     generated_words = []
 
