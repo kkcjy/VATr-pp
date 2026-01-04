@@ -21,90 +21,90 @@ def main():
     args = parser.parse_args()
 
     rSeed(args.seed)
-    dataset = CollectionTextDataset(
+    train_ds = CollectionTextDataset(
         args.dataset, 'files', TextDataset, file_suffix=args.file_suffix, num_examples=args.num_examples,
         collator_resolution=args.resolution, min_virtual_size=339, validation=False, debug=False, height=args.img_height
     )
-    datasetval = CollectionTextDataset(
+    val_ds = CollectionTextDataset(
         args.dataset, 'files', TextDataset, file_suffix=args.file_suffix, num_examples=args.num_examples,
         collator_resolution=args.resolution, min_virtual_size=161, validation=True, height=args.img_height
     )
 
-    args.num_writers = dataset.num_writers
+    args.num_writers = train_ds.num_writers
 
     if args.dataset == 'IAM' or args.dataset == 'CVL':
         args.alphabet = 'Only thewigsofrcvdampbkuq.A-210xT5\'MDL,RYHJ"ISPWENj&BC93VGFKz();#:!7U64Q8?+*ZX/%'
     else:
-        args.alphabet = ''.join(sorted(set(dataset.alphabet + datasetval.alphabet)))
-        args.special_alphabet = ''.join(c for c in args.special_alphabet if c not in dataset.alphabet)
+        args.alphabet = ''.join(sorted(set(train_ds.alphabet + val_ds.alphabet)))
+        args.special_alphabet = ''.join(c for c in args.special_alphabet if c not in train_ds.alphabet)
 
     args.exp_name = f"{args.dataset}-{args.num_writers}-{args.num_examples}-LR{args.g_lr}-bs{args.batch_size}-{args.tag}"
 
-    config = {k: v for k, v in args.__dict__.items() if isinstance(v, (bool, int, str, float))}
+    cfg = {k: v for k, v in args.__dict__.items() if isinstance(v, (bool, int, str, float))}
     args.wandb = args.wandb and (not torch.cuda.is_available() or torch.cuda.get_device_name(0) != 'Tesla K80')
-    wandb_id = wandb.util.generate_id()
+    wb_id = wandb.util.generate_id()
 
-    MODEL_PATH = os.path.join(args.save_model_path, args.exp_name)
-    os.makedirs(MODEL_PATH, exist_ok=True)
+    model_dir = os.path.join(args.save_model_path, args.exp_name)
+    os.makedirs(model_dir, exist_ok=True)
 
     train_loader = torch.utils.data.DataLoader(
-        dataset,
+        train_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True, drop_last=True,
-        collate_fn=dataset.collate_fn)
+        collate_fn=train_ds.collate_fn)
 
     val_loader = torch.utils.data.DataLoader(
-        datasetval,
+        val_ds,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True, drop_last=True,
-        collate_fn=datasetval.collate_fn)
+        collate_fn=val_ds.collate_fn)
 
     model = VATr(args)
     start_epoch = 0
 
-    del config['alphabet']
-    del config['special_alphabet']
+    del cfg['alphabet']
+    del cfg['special_alphabet']
 
-    wandb_params = {
+    wb_params = {
         'project': 'VATr',
-        'config': config,
+        'config': cfg,
         'name': args.exp_name,
-        'id': wandb_id
+        'id': wb_id
     }
 
-    checkpoint_path = os.path.join(MODEL_PATH, 'model.pth')
+    ckpt_path = os.path.join(model_dir, 'model.pth')
 
     loss_tracker = EpochLossTracker()
 
-    if args.resume and os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=args.device)
-        model.load_state_dict(checkpoint['model'])
-        start_epoch = checkpoint['epoch']
-        wandb_params['id'] = checkpoint['wandb_id']
-        wandb_params['resume'] = True
-        print(checkpoint_path + ' : Model loaded Successfully')
+    if args.resume and os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location=args.device)
+        model.load_state_dict(ckpt['model'])
+        start_epoch = ckpt['epoch']
+        wb_params['id'] = ckpt['wandb_id']
+        wb_params['resume'] = True
+        print(ckpt_path + ' : Model loaded Successfully')
     elif args.resume:
-        raise FileNotFoundError(f'No model found at {checkpoint_path}')
+        raise FileNotFoundError(f'No model found at {ckpt_path}')
     else:
         if args.feat_model_path is not None and args.feat_model_path.lower() != 'none':
             print('Loading...', args.feat_model_path)
             assert os.path.exists(args.feat_model_path)
-            checkpoint = torch.load(args.feat_model_path, map_location=args.device)
-            checkpoint['model']['conv1.weight'] = checkpoint['model']['conv1.weight'].mean(1).unsqueeze(1)
-            del checkpoint['model']['fc.weight']
-            del checkpoint['model']['fc.bias']
-            miss, unexp = model.netG.Feat_Encoder.load_state_dict(checkpoint['model'], strict=False)
-            if not os.path.isdir(MODEL_PATH):
-                os.mkdir(MODEL_PATH)
+            ckpt = torch.load(args.feat_model_path, map_location=args.device)
+            ckpt['model']['conv1.weight'] = ckpt['model']['conv1.weight'].mean(1).unsqueeze(1)
+            del ckpt['model']['fc.weight']
+            del ckpt['model']['fc.bias']
+            miss, unexp = model.netG.Feat_Encoder.load_state_dict(ckpt['model'], strict=False)
+            if not os.path.isdir(model_dir):
+                os.mkdir(model_dir)
         else:
             print(f'WARNING: No resume of Resnet-18, starting from scratch')
 
     if args.wandb:
-        wandb.init(**wandb_params)
+        wandb.init(**wb_params)
         wandb.watch(model)
 
     print(f"Starting training")
@@ -142,10 +142,10 @@ def main():
             loss_tracker.add_batch(batch_losses)
 
         end_time = time.time()
-        data_val = next(iter(val_loader))
+        val_batch = next(iter(val_loader))
         losses = loss_tracker.get_epoch_loss()
         page = model._generate_page(model.sdata, model.input['swids'])
-        page_val = model._generate_page(data_val['simg'].to(args.device), data_val['swids'])
+        val_page = model._generate_page(val_batch['simg'].to(args.device), val_batch['swids'])
 
         d_train, d_val, d_fake = model.compute_d_stats(train_loader, val_loader)
 
@@ -167,23 +167,23 @@ def main():
                 'l_cycle': losses['cycle'],
                 'epoch': epoch,
                 'timeperepoch': end_time - start_time,
-                'result': [wandb.Image(page, caption="page"), wandb.Image(page_val, caption="page_val")],
+                'result': [wandb.Image(page, caption="page"), wandb.Image(val_page, caption="val_page")],
                 'd-crop-size': model.netD.augmenter.get_current_width() if model.netD.crop else 0
             })
 
         print({'EPOCH': epoch, 'TIME': end_time - start_time, 'LOSSES': losses})
         print(f"Text sample: {model.get_text_sample(10)}")
 
-        checkpoint = {
+        ckpt = {
             'model': model.state_dict(),
-            'wandb_id': wandb_id,
+            'wandb_id': wb_id,
             'epoch': epoch
         }
         if epoch % args.save_model == 0:
-            torch.save(checkpoint, os.path.join(MODEL_PATH, 'model.pth'))
+            torch.save(ckpt, os.path.join(model_dir, 'model.pth'))
 
         if epoch % args.save_model_history == 0:
-            torch.save(checkpoint, os.path.join(MODEL_PATH, f'{epoch:04d}_model.pth'))
+            torch.save(ckpt, os.path.join(model_dir, f'{epoch:04d}_model.pth'))
 
 
 def rSeed(sd):

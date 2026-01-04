@@ -29,53 +29,53 @@ def get_long_tail_chars():
 
 
 class Writer:
-    def __init__(self, checkpoint_path, args, only_generator: bool = False):
+    def __init__(self, ckpt_path, args, only_gen: bool = False):
         self.model = VATr(args)
-        checkpoint = torch.load(checkpoint_path, map_location=args.device)
-        load_checkpoint(self.model, checkpoint) if not only_generator else load_generator(self.model, checkpoint)
+        ckpt = torch.load(ckpt_path, map_location=args.device)
+        load_checkpoint(self.model, ckpt) if not only_gen else load_generator(self.model, ckpt)
         self.model.eval()
-        self.style_dataset = None
+        self.style_ds = None
 
-    def set_style_folder(self, style_folder, num_examples=15):
-        word_lengths = None
-        if os.path.exists(os.path.join(style_folder, "word_lengths.txt")):
-            word_lengths = {}
-            with open(os.path.join(style_folder, "word_lengths.txt"), 'r') as f:
+    def set_style_folder(self, style_dir, n_examples=15):
+        word_lens = None
+        if os.path.exists(os.path.join(style_dir, "word_lengths.txt")):
+            word_lens = {}
+            with open(os.path.join(style_dir, "word_lengths.txt"), 'r') as f:
                 for line in f:
                     word, length = line.rstrip().split(",")
-                    word_lengths[word] = int(length)
+                    word_lens[word] = int(length)
 
-        self.style_dataset = FolderDataset(style_folder, num_examples=num_examples, word_lengths=word_lengths)
+        self.style_ds = FolderDataset(style_dir, num_examples=n_examples, word_lengths=word_lens)
 
     @torch.no_grad()
     def generate(self, texts, align_words: bool = False, at_once: bool = False):
         if isinstance(texts, str):
             texts = [texts]
-        if self.style_dataset is None:
+        if self.style_ds is None:
             raise Exception('Style is not set')
 
         fakes = []
         for i, text in enumerate(texts, 1):
             print(f'[{i}/{len(texts)}] Generating for text: {text}')
-            style = self.style_dataset.sample_style()
-            style_images = style['simg'].unsqueeze(0).to(self.model.args.device)
+            style = self.style_ds.sample_style()
+            style_imgs = style['simg'].unsqueeze(0).to(self.model.args.device)
 
-            fake = self.create_fake_sentence(style_images, text, align_words, at_once)
+            fake = self.create_fake_sentence(style_imgs, text, align_words, at_once)
 
             fakes.append(fake)
         return fakes
 
     @torch.no_grad()
-    def create_fake_sentence(self, style_images, text, align_words=False, at_once=False):
+    def create_fake_sentence(self, style_imgs, text, align_words=False, at_once=False):
         text = "".join([c for c in text if c in self.model.args.alphabet])
 
         text = text.split() if not at_once else [text]
         gap = np.ones((32, 16))
 
-        text_encode, len_text, encode_pos = self.model.netconverter.encode(text)
-        text_encode = text_encode.to(self.model.args.device).unsqueeze(0)
+        text_enc, len_text, enc_pos = self.model.netconverter.encode(text)
+        text_enc = text_enc.to(self.model.args.device).unsqueeze(0)
 
-        fake = self.model._generate_fakes(style_images, text_encode, len_text)
+        fake = self.model._generate_fakes(style_imgs, text_enc, len_text)
         if not at_once:
             if align_words:
                 fake = self.stitch_words(fake, show_lines=False)
@@ -88,37 +88,37 @@ class Writer:
         return fake
 
     @torch.no_grad()
-    def generate_authors(self, text, dataset, align_words: bool = False, at_once: bool = False):
+    def generate_authors(self, text, ds, align_words: bool = False, at_once: bool = False):
         fakes = []
-        author_ids = []
-        style = []
+        auth_ids = []
+        styles = []
 
-        for item in dataset:
+        for item in ds:
             print(f"Generating author {item['wcl']}")
-            style_images = item['simg'].to(self.model.args.device).unsqueeze(0)
+            style_imgs = item['simg'].to(self.model.args.device).unsqueeze(0)
 
-            generated_lines = [self.create_fake_sentence(style_images, line, align_words, at_once) for line in text]
+            gen_lines = [self.create_fake_sentence(style_imgs, line, align_words, at_once) for line in text]
 
-            fakes.append(generated_lines)
-            author_ids.append(item['author_id'])
-            style.append((((item['simg'].numpy() + 1.0) / 2.0) * 255).astype(np.uint8))
+            fakes.append(gen_lines)
+            auth_ids.append(item['author_id'])
+            styles.append((((item['simg'].numpy() + 1.0) / 2.0) * 255).astype(np.uint8))
 
-        return fakes, author_ids, style
+        return fakes, auth_ids, styles
 
     @torch.no_grad()
-    def generate_characters(self, dataset, characters: str):
+    def generate_chars(self, ds, chars: str):
         """
         Generate each of the given characters for each of the authors in the dataset.
         """
         fakes = []
 
-        text_encode, len_text, encode_pos = self.model.netconverter.encode([c for c in characters])
-        text_encode = text_encode.to(self.model.args.device).unsqueeze(0)
+        text_enc, len_text, enc_pos = self.model.netconverter.encode([c for c in chars])
+        text_enc = text_enc.to(self.model.args.device).unsqueeze(0)
 
-        for item in dataset:
+        for item in ds:
             print(f"Generating author {item['wcl']}")
-            style_images = item['simg'].to(self.model.args.device).unsqueeze(0)
-            fake = self.model.netG.evaluate(style_images, text_encode)
+            style_imgs = item['simg'].to(self.model.args.device).unsqueeze(0)
+            fake = self.model.netG.evaluate(style_imgs, text_enc)
 
             fakes.append(fake)
 
@@ -130,90 +130,90 @@ class Writer:
         Given a batch of style images and text, generate images using the model
         """
         device = self.model.args.device
-        text_encode, _, _ = self.model.netconverter.encode(text)
-        fakes, _ = self.model.netG(style_imgs.to(device), text_encode.to(device))
+        text_enc, _, _ = self.model.netconverter.encode(text)
+        fakes, _ = self.model.netG(style_imgs.to(device), text_enc.to(device))
         return fakes
 
     @torch.no_grad()
-    def generate_ocr(self, dataset, number: int, output_folder: str = 'saved_images/ocr', interpolate_style: bool = False, text_generator: TextGenerator = None, long_tail: bool = False):
-        def create_and_write(style, text, interpolated=False):
-            nonlocal image_counter, annotations
+    def generate_ocr(self, ds, num: int, out_dir: str = 'saved_images/ocr', interp_style: bool = False, text_gen: TextGenerator = None, long_tail: bool = False):
+        def create_and_write(style, text, interp=False):
+            nonlocal img_cnt, anns
 
-            text_encode, len_text, encode_pos = self.model.netconverter.encode([text])
-            text_encode = text_encode.to(self.model.args.device)
+            text_enc, len_text, enc_pos = self.model.netconverter.encode([text])
+            text_enc = text_enc.to(self.model.args.device)
 
-            fake = self.model.netG.generate(style, text_encode)
+            fake = self.model.netG.generate(style, text_enc)
 
             fake = (fake + 1) / 2
             fake = fake.cpu().numpy()
             fake = np.squeeze((fake * 255).astype(np.uint8))
 
-            image_filename = f"{image_counter}.png" if not interpolated else f"{image_counter}_i.png"
+            img_name = f"{img_cnt}.png" if not interp else f"{img_cnt}_i.png"
 
-            cv2.imwrite(os.path.join(output_folder, "generated", image_filename), fake)
+            cv2.imwrite(os.path.join(out_dir, "generated", img_name), fake)
 
-            annotations.append((image_filename, text))
+            anns.append((img_name, text))
 
-            image_counter += 1
+            img_cnt += 1
 
-        image_counter = 0
-        annotations = []
-        previous_style = None
-        long_tail_chars = get_long_tail_chars()
+        img_cnt = 0
+        anns = []
+        prev_style = None
+        lt_chars = get_long_tail_chars()
 
-        os.mkdir(os.path.join(output_folder, "generated"))
-        if text_generator is None:
-            os.mkdir(os.path.join(output_folder, "reference"))
+        os.mkdir(os.path.join(out_dir, "generated"))
+        if text_gen is None:
+            os.mkdir(os.path.join(out_dir, "reference"))
 
-        while image_counter < number:
-            author_index = random.randint(0, len(dataset) - 1)
-            item = dataset[author_index]
+        while img_cnt < num:
+            auth_idx = random.randint(0, len(ds) - 1)
+            item = ds[auth_idx]
 
-            style_images = item['simg'].to(self.model.args.device).unsqueeze(0)
-            style = self.model.netG.compute_style(style_images)
+            style_imgs = item['simg'].to(self.model.args.device).unsqueeze(0)
+            style = self.model.netG.compute_style(style_imgs)
 
-            if interpolate_style and previous_style is not None:
+            if interp_style and prev_style is not None:
                 factor = float(np.clip(random.gauss(0.5, 0.15), 0.0, 1.0))
-                intermediate_style = torch.lerp(previous_style, style, factor)
-                text = text_generator.generate()
+                interp_style = torch.lerp(prev_style, style, factor)
+                text = text_gen.generate()
 
-                create_and_write(intermediate_style, text, interpolated=True)
+                create_and_write(interp_style, text, interp=True)
 
-            if text_generator is not None:
-                text = text_generator.generate()
+            if text_gen is not None:
+                text = text_gen.generate()
             else:
                 text = str(item['label'].decode())
 
-                if long_tail and not any(c in long_tail_chars for c in text):
+                if long_tail and not any(c in lt_chars for c in text):
                     continue
 
                 fake = (item['img'] + 1) / 2
                 fake = fake.cpu().numpy()
                 fake = np.squeeze((fake * 255).astype(np.uint8))
 
-                image_filename = f"{image_counter}.png"
+                img_name = f"{img_cnt}.png"
 
-                cv2.imwrite(os.path.join(output_folder, "reference", image_filename), fake)
+                cv2.imwrite(os.path.join(out_dir, "reference", img_name), fake)
 
             create_and_write(style, text)
 
-            previous_style = style
+            prev_style = style
 
-        if text_generator is None:
-            with open(os.path.join(output_folder, "reference", "labels.csv"), 'w') as fr:
+        if text_gen is None:
+            with open(os.path.join(out_dir, "reference", "labels.csv"), 'w') as fr:
                 fr.write(f"filename,words\n")
-                for annotation in annotations:
-                    fr.write(f"{annotation[0]},{annotation[1]}\n")
+                for ann in anns:
+                    fr.write(f"{ann[0]},{ann[1]}\n")
 
-        with open(os.path.join(output_folder, "generated", "labels.csv"), 'w') as fg:
+        with open(os.path.join(out_dir, "generated", "labels.csv"), 'w') as fg:
             fg.write(f"filename,words\n")
-            for annotation in annotations:
-                fg.write(f"{annotation[0]},{annotation[1]}\n")
+            for ann in anns:
+                fg.write(f"{ann[0]},{ann[1]}\n")
 
 
     @staticmethod
     def stitch_words(words: list, show_lines: bool = False, scale_words: bool = False):
-        gap_width = 16
+        gap_w = 16
 
         bottom_lines = []
         top_lines = []
@@ -241,15 +241,15 @@ class Writer:
         offsets = highest - bottom_lines
         height = np.max(offsets + [word.shape[0] for word in words])
 
-        result = np.ones((int(height), gap_width * len(words) + sum([w.shape[1] for w in words])))
+        result = np.ones((int(height), gap_w * len(words) + sum([w.shape[1] for w in words])))
 
-        x_pos = 0
-        for bottom_line, word in zip(bottom_lines, words):
-            offset = int(highest - bottom_line)
+        x = 0
+        for b, word in zip(bottom_lines, words):
+            offset = int(highest - b)
 
-            result[offset:offset + word.shape[0], x_pos:x_pos+word.shape[1]] = word
+            result[offset:offset + word.shape[0], x:x+word.shape[1]] = word
 
-            x_pos += word.shape[1] + gap_width
+            x += word.shape[1] + gap_w
 
         return result
 
@@ -279,34 +279,34 @@ class Writer:
         print('  Saving images on {}'.format(str(real_base)))
         print('  Saving images on {}'.format(str(fake_base)))
 
-        long_tail_chars = get_long_tail_chars()
-        counter = 0
+        lt_chars = get_long_tail_chars()
+        cnt = 0
         ann = defaultdict(lambda: {})
         start_time = time.time()
         for step, data in enumerate(loader):
-            style_images = data['simg'].to(self.model.args.device)
+            style_imgs = data['simg'].to(self.model.args.device)
 
             texts = [l.decode('utf-8') for l in data['label']]
             texts = [t.encode('utf-8') for t in texts]
-            eval_text_encode, eval_len_text, _ = self.model.netconverter.encode(texts)
-            eval_text_encode = eval_text_encode.to(self.model.args.device).unsqueeze(1)
+            eval_text_enc, eval_len_text, _ = self.model.netconverter.encode(texts)
+            eval_text_enc = eval_text_enc.to(self.model.args.device).unsqueeze(1)
 
-            vis_style = np.vstack(style_images[0].detach().cpu().numpy())
+            vis_style = np.vstack(style_imgs[0].detach().cpu().numpy())
             vis_style = ((vis_style + 1) / 2) * 255
 
-            fakes = self.model.netG.evaluate(style_images, eval_text_encode)
-            fake_images = torch.cat(fakes, 1).detach().cpu().numpy()
-            real_images = data['img'].detach().cpu().numpy()
+            fakes = self.model.netG.evaluate(style_imgs, eval_text_enc)
+            fake_imgs = torch.cat(fakes, 1).detach().cpu().numpy()
+            real_imgs = data['img'].detach().cpu().numpy()
             writer_ids = data['wcl'].int().tolist()
 
-            for i, (fake, real, wid, lb, img_id) in enumerate(zip(fake_images, real_images, writer_ids, data['label'], data['idx'])):
+            for i, (fake, real, wid, lb, img_id) in enumerate(zip(fake_imgs, real_imgs, writer_ids, data['label'], data['idx'])):
                 lb = lb.decode()
                 ann[f"{wid:03d}"][f'{img_id:05d}'] = lb
                 img_id = f'{img_id:05d}.png'
 
-                is_long_tail = any(c in long_tail_chars for c in lb)
+                is_lt = any(c in lt_chars for c in lb)
 
-                if long_tail_only and not is_long_tail:
+                if long_tail_only and not is_lt:
                     continue
 
                 fake_img_path = fake_base / f"{wid:03d}" / img_id
@@ -318,12 +318,12 @@ class Writer:
                     real_img_path.parent.mkdir(exist_ok=True, parents=True)
                     cv2.imwrite(str(real_img_path), 255 * ((real.squeeze() + 1) / 2))
 
-                counter += 1
+                cnt += 1
 
             eta = (time.time() - start_time) / (step + 1) * (len(loader) - step - 1)
             eta = str(timedelta(seconds=eta))
             if step % 100 == 0:
-                print(f'[{(step + 1) / len(loader) * 100:.02f}%][{counter:05d}] ETA {eta}')
+                print(f'[{(step + 1) / len(loader) * 100:.02f}%][{cnt:05d}] ETA {eta}')
 
             with open(path / 'ann.json', 'w') as f:
                 json.dump(ann, f)

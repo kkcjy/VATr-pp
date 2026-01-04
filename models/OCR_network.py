@@ -2,35 +2,34 @@ import torch
 from .networks import *
 
 
-class BidirectionalLSTM(nn.Module):
+class BiLSTM(nn.Module):
 
-    def __init__(self, nIn, nHidden, nOut):
-        super(BidirectionalLSTM, self).__init__()
+    def __init__(self, n_in, n_hid, n_out):
+        super(BiLSTM, self).__init__()
 
-        self.rnn = nn.LSTM(nIn, nHidden, bidirectional=True)
-        self.embedding = nn.Linear(nHidden * 2, nOut)
+        self.rnn = nn.LSTM(n_in, n_hid, bidirectional=True)
+        self.emb = nn.Linear(n_hid * 2, n_out)
 
 
-    def forward(self, input):
-        recurrent, _ = self.rnn(input)
-        T, b, h = recurrent.size()
-        t_rec = recurrent.view(T * b, h)
+    def forward(self, x):
+        rec, _ = self.rnn(x)
+        T, b, h = rec.size()
+        t_rec = rec.view(T * b, h)
 
-        output = self.embedding(t_rec)  # [T * b, nOut]
-        output = output.view(T, b, -1)
+        out = self.emb(t_rec)  # [T * b, n_out]
+        out = out.view(T, b, -1)
 
-        return output
+        return out
 
 
 class CRNN(nn.Module):
 
-    def __init__(self, args, leakyRelu=False):
+    def __init__(self, args, leaky=False):
         super(CRNN, self).__init__()
         self.args = args
         self.name = 'OCR'
         self.add_noise = False
-        self.noise_fac = torch.distributions.Normal(loc=torch.tensor([0.]), scale=torch.tensor([0.2]))
-        #assert opt.imgH % 16 == 0, 'imgH has to be a multiple of 16'
+        self.noise = torch.distributions.Normal(loc=torch.tensor([0.]), scale=torch.tensor([0.2]))
 
         ks = [3, 3, 3, 3, 3, 3, 2]
         ps = [1, 1, 1, 1, 1, 1, 0]
@@ -39,155 +38,147 @@ class CRNN(nn.Module):
 
         cnn = nn.Sequential()
         nh = 256
-        dealwith_lossnone=False # whether to replace all nan/inf in gradients to zero
+        handle_nan = False
 
-        def convRelu(i, batchNormalization=False):
-            nIn = 1 if i == 0 else nm[i - 1]
-            nOut = nm[i]
+        def conv_relu(i, bn=False):
+            n_in = 1 if i == 0 else nm[i - 1]
+            n_out = nm[i]
             cnn.add_module('conv{0}'.format(i),
-                           nn.Conv2d(nIn, nOut, ks[i], ss[i], ps[i]))
-            if batchNormalization:
-                cnn.add_module('batchnorm{0}'.format(i), nn.BatchNorm2d(nOut))
-            if leakyRelu:
+                           nn.Conv2d(n_in, n_out, ks[i], ss[i], ps[i]))
+            if bn:
+                cnn.add_module('bn{0}'.format(i), nn.BatchNorm2d(n_out))
+            if leaky:
                 cnn.add_module('relu{0}'.format(i),
                                nn.LeakyReLU(0.2, inplace=True))
             else:
                 cnn.add_module('relu{0}'.format(i), nn.ReLU(True))
 
-        convRelu(0)
-        cnn.add_module('pooling{0}'.format(0), nn.MaxPool2d(2, 2))  # 64x16x64
-        convRelu(1)
-        cnn.add_module('pooling{0}'.format(1), nn.MaxPool2d(2, 2))  # 128x8x32
-        convRelu(2, True)
-        convRelu(3)
-        cnn.add_module('pooling{0}'.format(2),
-                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 256x4x16
-        convRelu(4, True)
+        conv_relu(0)
+        cnn.add_module('pool{0}'.format(0), nn.MaxPool2d(2, 2))
+        conv_relu(1)
+        cnn.add_module('pool{0}'.format(1), nn.MaxPool2d(2, 2))
+        conv_relu(2, True)
+        conv_relu(3)
+        cnn.add_module('pool{0}'.format(2),
+                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))
+        conv_relu(4, True)
         if self.args.resolution==63:
-            cnn.add_module('pooling{0}'.format(3),
-                           nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 256x4x16
-        convRelu(5)
-        cnn.add_module('pooling{0}'.format(4),
-                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))  # 512x2x16
-        convRelu(6, True)  # 512x1x16
+            cnn.add_module('pool{0}'.format(3),
+                           nn.MaxPool2d((2, 2), (2, 1), (0, 1)))
+        conv_relu(5)
+        cnn.add_module('pool{0}'.format(4),
+                       nn.MaxPool2d((2, 2), (2, 1), (0, 1)))
+        conv_relu(6, True)
 
         self.cnn = cnn
         self.use_rnn = False
         if self.use_rnn:
             self.rnn = nn.Sequential(
-                BidirectionalLSTM(512, nh, nh),
-                BidirectionalLSTM(nh, nh, ))
+                BiLSTM(512, nh, nh),
+                BiLSTM(nh, nh, ))
         else:
-            self.linear = nn.Linear(512, self.args.vocab_size)
+            self.lin = nn.Linear(512, self.args.vocab_size)
 
-        # replace all nan/inf in gradients to zero
-        if dealwith_lossnone:
-            self.register_backward_hook(self.backward_hook)
+        if handle_nan:
+            self.register_backward_hook(self.back_hook)
 
-        self.device = torch.device('cuda:{}'.format(0)) 
+        self.dev = torch.device('cuda:{}'.format(0))
         self.init = 'N02'
-        # Initialize weights
         
         self = init_weights(self, self.init)
 
-    def forward(self, input):
-        # conv features
+    def forward(self, x):
         if self.add_noise:
-            input = input + self.noise_fac.sample(input.size()).squeeze(-1).to(self.args.device)
-        conv = self.cnn(input)
+            x = x + self.noise.sample(x.size()).squeeze(-1).to(self.args.device)
+        conv = self.cnn(x)
         b, c, h, w = conv.size()
         if h!=1:
             print('a')
-        assert h == 1, "the height of conv must be 1"
+        assert h == 1
         conv = conv.squeeze(2)
-        conv = conv.permute(2, 0, 1)  # [w, b, c]
+        conv = conv.permute(2, 0, 1)
 
         if self.use_rnn:
-            # rnn features
-            output = self.rnn(conv)
+            out = self.rnn(conv)
         else:
-            output = self.linear(conv)
-        return output
+            out = self.lin(conv)
+        return out
 
-    def backward_hook(self, module, grad_input, grad_output):
-        for g in grad_input:
-            g[g != g] = 0  # replace all nan/inf in gradients to zero
+    def back_hook(self, mod, grad_in, grad_out):
+        for g in grad_in:
+            g[g != g] = 0
 
 
-class strLabelConverter(object):
+class LabelConv:
     """Convert between str and label.
     NOTE:
         Insert `blank` to the alphabet for CTC.
     Args:
-        alphabet (str): set of the possible characters.
+        alph (str): set of the possible characters.
         ignore_case (bool, default=True): whether or not to ignore all of the case.
     """
 
-    def __init__(self, alphabet, ignore_case=False):
+    def __init__(self, alph, ignore_case=False):
         self._ignore_case = ignore_case
         if self._ignore_case:
-            alphabet = alphabet.lower()
-        self.alphabet = alphabet + '-'  # for `-1` index
+            alph = alph.lower()
+        self.alph = alph + '-'
 
         self.dict = {}
-        for i, char in enumerate(alphabet):
-            # NOTE: 0 is reserved for 'blank' required by wrap_ctc
-            self.dict[char] = i + 1
+        for i, ch in enumerate(alph):
+            self.dict[ch] = i + 1
 
-    def encode(self, text):
+    def encode(self, texts):
         """Support batch or single str.
         Args:
-            text (str or list of str): texts to convert.
+            texts (str or list of str): texts to convert.
         Returns:
-            torch.IntTensor [length_0 + length_1 + ... length_{n - 1}]: encoded texts.
+            torch.IntTensor [len_0 + len_1 + ... len_{n - 1}]: encoded texts.
             torch.IntTensor [n]: length of each text.
         """
-        length = []
-        result = []
-        results = []
-        for item in text:
-            if isinstance(item, bytes): item = item.decode('utf-8', 'strict')
-            length.append(len(item))
-            for char in item:
-                index = self.dict[char]
-                result.append(index)
-            results.append(result)
-            result = []
+        lens = []
+        res = []
+        all_res = []
+        for txt in texts:
+            if isinstance(txt, bytes): txt = txt.decode('utf-8', 'strict')
+            lens.append(len(txt))
+            for ch in txt:
+                idx = self.dict[ch]
+                res.append(idx)
+            all_res.append(res)
+            res = []
 
-        return torch.nn.utils.rnn.pad_sequence([torch.LongTensor(text) for text in results], batch_first=True), torch.IntTensor(length), None
+        return torch.nn.utils.rnn.pad_sequence([torch.LongTensor(txt) for txt in all_res], batch_first=True), torch.IntTensor(lens), None
 
-    def decode(self, t, length, raw=False):
+    def decode(self, t, lens, raw=False):
         """Decode encoded texts back into strs.
         Args:
-            torch.IntTensor [length_0 + length_1 + ... length_{n - 1}]: encoded texts.
+            torch.IntTensor [len_0 + len_1 + ... len_{n - 1}]: encoded texts.
             torch.IntTensor [n]: length of each text.
         Raises:
             AssertionError: when the texts and its length does not match.
         Returns:
             text (str or list of str): texts to convert.
         """
-        if length.numel() == 1:
-            length = length[0]
-            assert t.numel() == length, "text with length: {} does not match declared length: {}".format(t.numel(),
-                                                                                                         length)
+        if lens.numel() == 1:
+            l = lens[0]
+            assert t.numel() == l
             if raw:
-                return ''.join([self.alphabet[i - 1] for i in t])
+                return ''.join([self.alph[i - 1] for i in t])
             else:
-                char_list = []
-                for i in range(length):
+                chars = []
+                for i in range(l):
                     if t[i] != 0 and (not (i > 0 and t[i - 1] == t[i])):
-                        char_list.append(self.alphabet[t[i] - 1])
-                return ''.join(char_list)
+                        chars.append(self.alph[t[i] - 1])
+                return ''.join(chars)
         else:
-            # batch mode
-            assert t.numel() == length.sum(), "texts with length: {} does not match declared length: {}".format(
-                t.numel(), length.sum())
-            texts = []
-            index = 0
-            for i in range(length.numel()):
-                l = length[i]
-                texts.append(
+            assert t.numel() == lens.sum()
+            txts = []
+            idx = 0
+            for i in range(lens.numel()):
+                l = lens[i]
+                txts.append(
                     self.decode(
-                        t[index:index + l], torch.IntTensor([l]), raw=raw))
-                index += l
-            return texts
+                        t[idx:idx + l], torch.IntTensor([l]), raw=raw))
+                idx += l
+            return txts

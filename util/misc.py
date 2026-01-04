@@ -23,52 +23,52 @@ import torchvision
 
 class EpochLossTracker:
     def __init__(self):
-        self.values = defaultdict(lambda: 0.0)
-        self.batch_counter = 0
+        self.vals = defaultdict(lambda: 0.0)
+        self.batch_cnt = 0
 
-    def add_batch(self, loss_values: dict):
-        for key, value in loss_values.items():
-            self.values[key] += value
+    def add_batch(self, losses: dict):
+        for k, v in losses.items():
+            self.vals[k] += v
 
-        self.batch_counter += 1
+        self.batch_cnt += 1
 
     def get_epoch_loss(self):
-        return {k: v / self.batch_counter for k, v in self.values.items()}
+        return {k: v / self.batch_cnt for k, v in self.vals.items()}
 
     def reset(self):
-        self.values = defaultdict(lambda: 0.0)
-        self.batch_counter = 0
+        self.vals = defaultdict(lambda: 0.0)
+        self.batch_cnt = 0
 
 
-class SmoothedValue(object):
+class SmoothedValue:
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
     """
 
-    def __init__(self, window_size=20, fmt=None):
+    def __init__(self, win_sz=20, fmt=None):
         if fmt is None:
             fmt = "{median:.4f} ({global_avg:.4f})"
-        self.deque = deque(maxlen=window_size)
+        self.deque = deque(maxlen=win_sz)
         self.total = 0.0
-        self.count = 0
+        self.cnt = 0
         self.fmt = fmt
 
-    def update(self, value, n=1):
-        self.deque.append(value)
-        self.count += n
-        self.total += value * n
+    def update(self, val, n=1):
+        self.deque.append(val)
+        self.cnt += n
+        self.total += val * n
 
-    def synchronize_between_processes(self):
+    def sync_procs(self):
         """
         Warning: does not synchronize the deque!
         """
-        if not is_dist_avail_and_initialized():
+        if not is_dist_avail_init():
             return
-        t = torch.tensor([self.count, self.total], dtype=torch.float64, device='cuda')
+        t = torch.tensor([self.cnt, self.total], dtype=torch.float64, device='cuda')
         dist.barrier()
         dist.all_reduce(t)
         t = t.tolist()
-        self.count = int(t[0])
+        self.cnt = int(t[0])
         self.total = t[1]
 
     @property
@@ -83,14 +83,14 @@ class SmoothedValue(object):
 
     @property
     def global_avg(self):
-        return self.total / self.count
+        return self.total / self.cnt
 
     @property
     def max(self):
         return max(self.deque)
 
     @property
-    def value(self):
+    def val(self):
         return self.deque[-1]
 
     def __str__(self):
@@ -99,7 +99,7 @@ class SmoothedValue(object):
             avg=self.avg,
             global_avg=self.global_avg,
             max=self.max,
-            value=self.value)
+            val=self.val)
 
 
 def all_gather(data):
@@ -110,72 +110,72 @@ def all_gather(data):
     Returns:
         list[data]: list of data gathered from each rank
     """
-    world_size = get_world_size()
-    if world_size == 1:
+    world_sz = get_world_sz()
+    if world_sz == 1:
         return [data]
 
     # serialized to a Tensor
-    buffer = pickle.dumps(data)
-    storage = torch.ByteStorage.from_buffer(buffer)
+    buf = pickle.dumps(data)
+    storage = torch.ByteStorage.from_buffer(buf)
     tensor = torch.ByteTensor(storage).to("cuda")
 
     # obtain Tensor size of each rank
-    local_size = torch.tensor([tensor.numel()], device="cuda")
-    size_list = [torch.tensor([0], device="cuda") for _ in range(world_size)]
-    dist.all_gather(size_list, local_size)
-    size_list = [int(size.item()) for size in size_list]
-    max_size = max(size_list)
+    local_sz = torch.tensor([tensor.numel()], device="cuda")
+    sz_list = [torch.tensor([0], device="cuda") for _ in range(world_sz)]
+    dist.all_gather(sz_list, local_sz)
+    sz_list = [int(sz.item()) for sz in sz_list]
+    max_sz = max(sz_list)
 
     # receiving Tensor from all ranks
     # we pad the tensor because torch all_gather does not support
     # gathering tensors of different shapes
     tensor_list = []
-    for _ in size_list:
-        tensor_list.append(torch.empty((max_size,), dtype=torch.uint8, device="cuda"))
-    if local_size != max_size:
-        padding = torch.empty(size=(max_size - local_size,), dtype=torch.uint8, device="cuda")
-        tensor = torch.cat((tensor, padding), dim=0)
+    for _ in sz_list:
+        tensor_list.append(torch.empty((max_sz,), dtype=torch.uint8, device="cuda"))
+    if local_sz != max_sz:
+        pad = torch.empty(size=(max_sz - local_sz,), dtype=torch.uint8, device="cuda")
+        tensor = torch.cat((tensor, pad), dim=0)
     dist.all_gather(tensor_list, tensor)
 
     data_list = []
-    for size, tensor in zip(size_list, tensor_list):
-        buffer = tensor.cpu().numpy().tobytes()[:size]
-        data_list.append(pickle.loads(buffer))
+    for sz, t in zip(sz_list, tensor_list):
+        buf = t.cpu().numpy().tobytes()[:sz]
+        data_list.append(pickle.loads(buf))
 
     return data_list
 
 
-def reduce_dict(input_dict, average=True):
+def reduce_dict(in_dict, avg=True):
     """
     Args:
-        input_dict (dict): all the values will be reduced
-        average (bool): whether to do average or sum
+        in_dict (dict): all the values will be reduced
+        avg (bool): whether to do average or sum
     Reduce the values in the dictionary from all processes so that all processes
     have the averaged results. Returns a dict with the same fields as
-    input_dict, after reduction.
+    in_dict, after reduction.
     """
-    world_size = get_world_size()
-    if world_size < 2:
-        return input_dict
+    world_sz = get_world_sz()
+    if world_sz < 2:
+        return in_dict
     with torch.no_grad():
         names = []
-        values = []
+        vals = []
         # sort the keys so that they are consistent across processes
-        for k in sorted(input_dict.keys()):
+        for k in sorted(in_dict.keys()):
             names.append(k)
-            values.append(input_dict[k])
-        values = torch.stack(values, dim=0)
-        dist.all_reduce(values)
-        if average:
-            values /= world_size
-        reduced_dict = {k: v for k, v in zip(names, values)}
-    return reduced_dict
+            vals.append(in_dict[k])
+        vals = torch.stack(vals, dim=0)
+        dist.all_reduce(vals)
+        if avg:
+            vals /= world_sz
+        red_dict = {k: v for k, v in zip(names, vals)}
+    return red_dict
 
 
-class MetricLogger(object):
-    def __init__(self, delimiter="\t"):
+class MetricLogger:
+    def __init__(self, delim="\t"):
         self.meters = defaultdict(SmoothedValue)
-        self.delimiter = delimiter
+        self.delim = delim
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -198,11 +198,11 @@ class MetricLogger(object):
             loss_str.append(
                 "{}: {}".format(name, str(meter))
             )
-        return self.delimiter.join(loss_str)
+        return self.delim.join(loss_str)
 
-    def synchronize_between_processes(self):
+    def sync_procs(self):
         for meter in self.meters.values():
-            meter.synchronize_between_processes()
+            meter.sync_procs()
 
     def add_meter(self, name, meter):
         self.meters[name] = meter
@@ -211,23 +211,23 @@ class MetricLogger(object):
         i = 0
         if not header:
             header = ''
-        start_time = time.time()
+        start = time.time()
         end = time.time()
         iter_time = SmoothedValue(fmt='{avg:.4f}')
         data_time = SmoothedValue(fmt='{avg:.4f}')
         space_fmt = ':' + str(len(str(len(iterable)))) + 'd'
         if torch.cuda.is_available():
-            log_msg = self.delimiter.join([
+            log_msg = self.delim.join([
                 header,
                 '[{0' + space_fmt + '}/{1}]',
                 'eta: {eta}',
                 '{meters}',
                 'time: {time}',
                 'data: {data}',
-                'max mem: {memory:.0f}'
+                'max mem: {mem:.0f}'
             ])
         else:
-            log_msg = self.delimiter.join([
+            log_msg = self.delim.join([
                 header,
                 '[{0' + space_fmt + '}/{1}]',
                 'eta: {eta}',
@@ -241,32 +241,32 @@ class MetricLogger(object):
             yield obj
             iter_time.update(time.time() - end)
             if i % print_freq == 0 or i == len(iterable) - 1:
-                eta_seconds = iter_time.global_avg * (len(iterable) - i)
-                eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
+                eta_sec = iter_time.global_avg * (len(iterable) - i)
+                eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
                 if torch.cuda.is_available():
                     print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
+                        i, len(iterable), eta=eta_str,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time),
-                        memory=torch.cuda.max_memory_allocated() / MB))
+                        mem=torch.cuda.max_memory_allocated() / MB))
                 else:
                     print(log_msg.format(
-                        i, len(iterable), eta=eta_string,
+                        i, len(iterable), eta=eta_str,
                         meters=str(self),
                         time=str(iter_time), data=str(data_time)))
             i += 1
             end = time.time()
-        total_time = time.time() - start_time
-        total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+        total = time.time() - start
+        total_str = str(datetime.timedelta(seconds=int(total)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
-            header, total_time_str, total_time / len(iterable)))
+            header, total_str, total / len(iterable)))
 
 
 def get_sha():
     cwd = os.path.dirname(os.path.abspath(__file__))
 
-    def _run(command):
-        return subprocess.check_output(command, cwd=cwd).decode('ascii').strip()
+    def _run(cmd):
+        return subprocess.check_output(cmd, cwd=cwd).decode('ascii').strip()
     sha = 'N/A'
     diff = "clean"
     branch = 'N/A'
@@ -278,37 +278,37 @@ def get_sha():
         branch = _run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
     except Exception:
         pass
-    message = f"sha: {sha}, status: {diff}, branch: {branch}"
-    return message
+    msg = f"sha: {sha}, status: {diff}, branch: {branch}"
+    return msg
 
 
 def collate_fn(batch):
     batch = list(zip(*batch))
-    batch[0] = nested_tensor_from_tensor_list(batch[0])
+    batch[0] = nested_tensor_from_list(batch[0])
     return tuple(batch)
 
 
-def _max_by_axis(the_list):
+def _max_by_axis(lst):
     # type: (List[List[int]]) -> List[int]
-    maxes = the_list[0]
-    for sublist in the_list[1:]:
-        for index, item in enumerate(sublist):
-            maxes[index] = max(maxes[index], item)
+    maxes = lst[0]
+    for sub in lst[1:]:
+        for idx, item in enumerate(sub):
+            maxes[idx] = max(maxes[idx], item)
     return maxes
 
 
-class NestedTensor(object):
+class NestedTensor:
     def __init__(self, tensors, mask: Optional[Tensor]):
         self.tensors = tensors
         self.mask = mask
 
-    def to(self, device):
+    def to(self, dev):
         # type: (Device) -> NestedTensor # noqa
-        cast_tensor = self.tensors.to(device)
+        cast_tensor = self.tensors.to(dev)
         mask = self.mask
         if mask is not None:
             assert mask is not None
-            cast_mask = mask.to(device)
+            cast_mask = mask.to(dev)
         else:
             cast_mask = None
         return NestedTensor(cast_tensor, cast_mask)
@@ -320,23 +320,23 @@ class NestedTensor(object):
         return str(self.tensors)
 
 
-def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
+def nested_tensor_from_list(tensor_list: List[Tensor]):
     # TODO make this more general
     if tensor_list[0].ndim == 3:
         if torchvision._is_tracing():
-            # nested_tensor_from_tensor_list() does not export well to ONNX
-            # call _onnx_nested_tensor_from_tensor_list() instead
-            return _onnx_nested_tensor_from_tensor_list(tensor_list)
+            # nested_tensor_from_list() does not export well to ONNX
+            # call _onnx_nested_tensor_from_list() instead
+            return _onnx_nested_tensor_from_list(tensor_list)
 
         # TODO make it support different-sized images
-        max_size = _max_by_axis([list(img.shape) for img in tensor_list])
-        # min_size = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
-        batch_shape = [len(tensor_list)] + max_size
+        max_sz = _max_by_axis([list(img.shape) for img in tensor_list])
+        # min_sz = tuple(min(s) for s in zip(*[img.shape for img in tensor_list]))
+        batch_shape = [len(tensor_list)] + max_sz
         b, c, h, w = batch_shape
         dtype = tensor_list[0].dtype
-        device = tensor_list[0].device
-        tensor = torch.zeros(batch_shape, dtype=dtype, device=device)
-        mask = torch.ones((b, h, w), dtype=torch.bool, device=device)
+        dev = tensor_list[0].device
+        tensor = torch.zeros(batch_shape, dtype=dtype, device=dev)
+        mask = torch.ones((b, h, w), dtype=torch.bool, device=dev)
         for img, pad_img, m in zip(tensor_list, tensor, mask):
             pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
             m[: img.shape[1], :img.shape[2]] = False
@@ -345,15 +345,15 @@ def nested_tensor_from_tensor_list(tensor_list: List[Tensor]):
     return NestedTensor(tensor, mask)
 
 
-# _onnx_nested_tensor_from_tensor_list() is an implementation of
-# nested_tensor_from_tensor_list() that is supported by ONNX tracing.
+# _onnx_nested_tensor_from_list() is an implementation of
+# nested_tensor_from_list() that is supported by ONNX tracing.
 @torch.jit.unused
-def _onnx_nested_tensor_from_tensor_list(tensor_list: List[Tensor]) -> NestedTensor:
-    max_size = []
+def _onnx_nested_tensor_from_list(tensor_list: List[Tensor]) -> NestedTensor:
+    max_sz = []
     for i in range(tensor_list[0].dim()):
-        max_size_i = torch.max(torch.stack([img.shape[i] for img in tensor_list]).to(torch.float32)).to(torch.int64)
-        max_size.append(max_size_i)
-    max_size = tuple(max_size)
+        max_sz_i = torch.max(torch.stack([img.shape[i] for img in tensor_list]).to(torch.float32)).to(torch.int64)
+        max_sz.append(max_sz_i)
+    max_sz = tuple(max_sz)
 
     # work around for
     # pad_img[: img.shape[0], : img.shape[1], : img.shape[2]].copy_(img)
@@ -362,12 +362,12 @@ def _onnx_nested_tensor_from_tensor_list(tensor_list: List[Tensor]) -> NestedTen
     padded_imgs = []
     padded_masks = []
     for img in tensor_list:
-        padding = [(s1 - s2) for s1, s2 in zip(max_size, tuple(img.shape))]
-        padded_img = torch.nn.functional.pad(img, (0, padding[2], 0, padding[1], 0, padding[0]))
+        pad = [(s1 - s2) for s1, s2 in zip(max_sz, tuple(img.shape))]
+        padded_img = torch.nn.functional.pad(img, (0, pad[2], 0, pad[1], 0, pad[0]))
         padded_imgs.append(padded_img)
 
         m = torch.zeros_like(img[0], dtype=torch.int, device=img.device)
-        padded_mask = torch.nn.functional.pad(m, (0, padding[2], 0, padding[1]), "constant", 1)
+        padded_mask = torch.nn.functional.pad(m, (0, pad[2], 0, pad[1]), "constant", 1)
         padded_masks.append(padded_mask.to(torch.bool))
 
     tensor = torch.stack(padded_imgs)
@@ -376,7 +376,7 @@ def _onnx_nested_tensor_from_tensor_list(tensor_list: List[Tensor]) -> NestedTen
     return NestedTensor(tensor, mask=mask)
 
 
-def setup_for_distributed(is_master):
+def setup_dist(is_master):
     """
     This function disables printing when not in master process
     """
@@ -391,7 +391,7 @@ def setup_for_distributed(is_master):
     __builtin__.print = print
 
 
-def is_dist_avail_and_initialized():
+def is_dist_avail_init():
     if not dist.is_available():
         return False
     if not dist.is_initialized():
@@ -399,31 +399,31 @@ def is_dist_avail_and_initialized():
     return True
 
 
-def get_world_size():
-    if not is_dist_avail_and_initialized():
+def get_world_sz():
+    if not is_dist_avail_init():
         return 1
     return dist.get_world_size()
 
 
 def get_rank():
-    if not is_dist_avail_and_initialized():
+    if not is_dist_avail_init():
         return 0
     return dist.get_rank()
 
 
-def is_main_process():
+def is_main_proc():
     return get_rank() == 0
 
 
 def save_on_master(*args, **kwargs):
-    if is_main_process():
+    if is_main_proc():
         torch.save(*args, **kwargs)
 
 
-def init_distributed_mode(args):
+def init_dist_mode(args):
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         args.rank = int(os.environ["RANK"])
-        args.world_size = int(os.environ['WORLD_SIZE'])
+        args.world_sz = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
     elif 'SLURM_PROCID' in os.environ:
         args.rank = int(os.environ['SLURM_PROCID'])
@@ -440,9 +440,9 @@ def init_distributed_mode(args):
     print('| distributed init (rank {}): {}'.format(
         args.rank, args.dist_url), flush=True)
     torch.distributed.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
-                                         world_size=args.world_size, rank=args.rank)
+                                         world_size=args.world_sz, rank=args.rank)
     torch.distributed.barrier()
-    setup_for_distributed(args.rank == 0)
+    setup_dist(args.rank == 0)
 
 
 @torch.no_grad()
@@ -451,7 +451,7 @@ def accuracy(output, target, topk=(1,)):
     if target.numel() == 0:
         return [torch.zeros([], device=output.device)]
     maxk = max(topk)
-    batch_size = target.size(0)
+    bs = target.size(0)
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
@@ -460,11 +460,11 @@ def accuracy(output, target, topk=(1,)):
     res = []
     for k in topk:
         correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
+        res.append(correct_k.mul_(100.0 / bs))
     return res
 
 
-def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corners=None):
+def interpolate(input, sz=None, scale=None, mode="nearest", align_corners=None):
     # type: (Tensor, Optional[List[int]], Optional[float], str, Optional[bool]) -> Tensor
     """
     Equivalent to nn.functional.interpolate, but with support for empty batch sizes.
@@ -474,14 +474,14 @@ def interpolate(input, size=None, scale_factor=None, mode="nearest", align_corne
     if float(torchvision.__version__[:3]) < 0.7:
         if input.numel() > 0:
             return torch.nn.functional.interpolate(
-                input, size, scale_factor, mode, align_corners
+                input, sz, scale, mode, align_corners
             )
 
-        output_shape = _output_size(2, input, size, scale_factor)
-        output_shape = list(input.shape[:-2]) + list(output_shape)
-        return _new_empty_tensor(input, output_shape)
+        output_sz = _output_sz(2, input, sz, scale)
+        output_sz = list(input.shape[:-2]) + list(output_sz)
+        return _new_empty_tensor(input, output_sz)
     else:
-        return torchvision.ops.misc.interpolate(input, size, scale_factor, mode, align_corners)
+        return torchvision.ops.misc.interpolate(input, sz, scale, mode, align_corners)
 
 
 def add_vatr_args(parser):
@@ -578,7 +578,7 @@ class FakeArgs:
     arch_blur_size = 0
 
 
-def get_default_args():
+def get_def_args():
     parser = argparse.ArgumentParser()
     parser = add_vatr_args(parser)
 
@@ -588,27 +588,27 @@ def get_default_args():
     return args
 
 
-class LinearScheduler:
-    def __init__(self, param_value: float, start_epoch : int = 0, warmup_epochs: int = 0):
+class LinScheduler:
+    def __init__(self, param_val: float, start_epoch : int = 0, warmup_epochs: int = 0):
         self.start_epoch = start_epoch
         self.warmup_epochs = warmup_epochs
-        self.param_value = param_value
+        self.param_val = param_val
 
-    def get_value(self, epoch):
+    def get_val(self, epoch):
         if self.start_epoch != 0 and epoch < self.start_epoch:
             return 0.0
         else:
-            return min(self.param_value, (max(epoch - self.start_epoch, 1) / max(self.warmup_epochs, 1)) * self.param_value)
+            return min(self.param_val, (max(epoch - self.start_epoch, 1) / max(self.warmup_epochs, 1)) * self.param_val)
 
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
-    scheduler = LinearScheduler(0.0, 0, 0)
+    scheduler = LinScheduler(0.0, 0, 0)
 
     v= []
     for i in range(1000):
-        v.append(scheduler.get_value(i))
+        v.append(scheduler.get_val(i))
 
     plt.plot(v)
     plt.show()

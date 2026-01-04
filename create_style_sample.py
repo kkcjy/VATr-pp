@@ -13,13 +13,13 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    image = cv2.imread(args.input_image)
-    image = cv2.resize(image, (image.shape[1], image.shape[0]))
-    result = get_page(image)
-    words, _ = get_words(result)
+    img = cv2.imread(args.input_image)
+    img = cv2.resize(img, (img.shape[1], img.shape[0]))
+    page = get_page(img)
+    words, _ = get_words(page)
 
-    output_path = args.output_folder
-    if not os.path.exists(output_path):
-        os.mkdir(output_path)
+    out_dir = args.output_folder
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
     for i, word in enumerate(words):
-        cv2.imwrite(os.path.join(output_path, f"word{i}.png"), word)
+        cv2.imwrite(os.path.join(out_dir, f"word{i}.png"), word)

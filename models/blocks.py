@@ -4,15 +4,12 @@ from torch import nn
 
 
 class ResBlocks(nn.Module):
-    def __init__(self, num_blocks, dim, norm, activation, pad_type):
+    def __init__(self, n_blocks, dim, norm, act, pad_type):
         super(ResBlocks, self).__init__()
-        self.model = []
-        for i in range(num_blocks):
-            self.model += [ResBlock(dim,
-                                    norm=norm,
-                                    activation=activation,
-                                    pad_type=pad_type)]
-        self.model = nn.Sequential(*self.model)
+        blocks = []
+        for _ in range(n_blocks):
+            blocks.append(ResBlock(dim, norm=norm, activation=act, pad_type=pad_type))
+        self.model = nn.Sequential(*blocks)
 
     def forward(self, x):
         return self.model(x)
@@ -21,48 +18,45 @@ class ResBlocks(nn.Module):
 class ResBlock(nn.Module):
     def __init__(self, dim, norm='in', activation='relu', pad_type='zero'):
         super(ResBlock, self).__init__()
-        model = []
-        model += [Conv2dBlock(dim, dim, 3, 1, 1,
-                              norm=norm,
-                              activation=activation,
-                              pad_type=pad_type)]
-        model += [Conv2dBlock(dim, dim, 3, 1, 1,
-                              norm=norm,
-                              activation='none',
-                              pad_type=pad_type)]
-        self.model = nn.Sequential(*model)
+        layers = []
+        layers.append(ConvBlock(dim, dim, 3, 1, 1,
+                                norm=norm,
+                                activation=activation,
+                                pad_type=pad_type))
+        layers.append(ConvBlock(dim, dim, 3, 1, 1,
+                                norm=norm,
+                                activation='none',
+                                pad_type=pad_type))
+        self.layers = nn.Sequential(*layers)
 
     def forward(self, x):
-        residual = x
-        out = self.model(x)
-        out += residual
-        return out
+        return x + self.layers(x)
 
 
 class ActFirstResBlock(nn.Module):
-    def __init__(self, fin, fout, fhid=None,
+    def __init__(self, in_ch, out_ch, hid_ch=None,
                  activation='lrelu', norm='none'):
         super().__init__()
-        self.learned_shortcut = (fin != fout)
-        self.fin = fin
-        self.fout = fout
-        self.fhid = min(fin, fout) if fhid is None else fhid
-        self.conv_0 = Conv2dBlock(self.fin, self.fhid, 3, 1,
-                                  padding=1, pad_type='reflect', norm=norm,
-                                  activation=activation, activation_first=True)
-        self.conv_1 = Conv2dBlock(self.fhid, self.fout, 3, 1,
-                                  padding=1, pad_type='reflect', norm=norm,
-                                  activation=activation, activation_first=True)
-        if self.learned_shortcut:
-            self.conv_s = Conv2dBlock(self.fin, self.fout, 1, 1,
-                                      activation='none', use_bias=False)
+        self.use_shortcut = (in_ch != out_ch)
+        self.in_ch = in_ch
+        self.out_ch = out_ch
+        self.hid_ch = min(in_ch, out_ch) if hid_ch is None else hid_ch
+        
+        self.conv0 = ConvBlock(self.in_ch, self.hid_ch, 3, 1,
+                               padding=1, pad_type='reflect', norm=norm,
+                               activation=activation, act_first=True)
+        self.conv1 = ConvBlock(self.hid_ch, self.out_ch, 3, 1,
+                               padding=1, pad_type='reflect', norm=norm,
+                               activation=activation, act_first=True)
+        if self.use_shortcut:
+            self.conv_s = ConvBlock(self.in_ch, self.out_ch, 1, 1,
+                                    activation='none', use_bias=False)
 
     def forward(self, x):
-        x_s = self.conv_s(x) if self.learned_shortcut else x
-        dx = self.conv_0(x)
-        dx = self.conv_1(dx)
-        out = x_s + dx
-        return out
+        x_s = self.conv_s(x) if self.use_shortcut else x
+        dx = self.conv0(x)
+        dx = self.conv1(dx)
+        return x_s + dx
 
 
 class LinearBlock(nn.Module):
@@ -71,7 +65,7 @@ class LinearBlock(nn.Module):
         use_bias = True
         self.fc = nn.Linear(in_dim, out_dim, bias=use_bias)
 
-        # initialize normalization
+        # init normalization
         norm_dim = out_dim
         if norm == 'bn':
             self.norm = nn.BatchNorm1d(norm_dim)
@@ -80,37 +74,38 @@ class LinearBlock(nn.Module):
         elif norm == 'none':
             self.norm = None
         else:
-            assert 0, "Unsupported normalization: {}".format(norm)
+            raise ValueError(f"Unsupported norm: {norm}")
 
-        # initialize activation
+        # init activation
         if activation == 'relu':
-            self.activation = nn.ReLU(inplace=False)
+            self.act = nn.ReLU(inplace=False)
         elif activation == 'lrelu':
-            self.activation = nn.LeakyReLU(0.2, inplace=False)
+            self.act = nn.LeakyReLU(0.2, inplace=False)
         elif activation == 'tanh':
-            self.activation = nn.Tanh()
+            self.act = nn.Tanh()
         elif activation == 'none':
-            self.activation = None
+            self.act = None
         else:
-            assert 0, "Unsupported activation: {}".format(activation)
+            raise ValueError(f"Unsupported activation: {activation}")
 
     def forward(self, x):
-        out = self.fc(x)
+        x = self.fc(x)
         if self.norm:
-            out = self.norm(out)
-        if self.activation:
-            out = self.activation(out)
-        return out
+            x = self.norm(x)
+        if self.act:
+            x = self.act(x)
+        return x
 
 
-class Conv2dBlock(nn.Module):
-    def __init__(self, in_dim, out_dim, ks, st, padding=0,
+class ConvBlock(nn.Module):
+    def __init__(self, in_ch, out_ch, ks, stride, padding=0,
                  norm='none', activation='relu', pad_type='zero',
-                 use_bias=True, activation_first=False):
-        super(Conv2dBlock, self).__init__()
+                 use_bias=True, act_first=False):
+        super(ConvBlock, self).__init__()
         self.use_bias = use_bias
-        self.activation_first = activation_first
-        # initialize padding
+        self.act_first = act_first
+        
+        # init padding
         if pad_type == 'reflect':
             self.pad = nn.ReflectionPad2d(padding)
         elif pad_type == 'replicate':
@@ -118,10 +113,10 @@ class Conv2dBlock(nn.Module):
         elif pad_type == 'zero':
             self.pad = nn.ZeroPad2d(padding)
         else:
-            assert 0, "Unsupported padding type: {}".format(pad_type)
+            raise ValueError(f"Unsupported pad type: {pad_type}")
 
-        # initialize normalization
-        norm_dim = out_dim
+        # init normalization
+        norm_dim = out_ch
         if norm == 'bn':
             self.norm = nn.BatchNorm2d(norm_dim)
         elif norm == 'in':
@@ -131,26 +126,26 @@ class Conv2dBlock(nn.Module):
         elif norm == 'none':
             self.norm = None
         else:
-            assert 0, "Unsupported normalization: {}".format(norm)
+            raise ValueError(f"Unsupported norm: {norm}")
 
-        # initialize activation
+        # init activation
         if activation == 'relu':
-            self.activation = nn.ReLU(inplace=False)
+            self.act = nn.ReLU(inplace=False)
         elif activation == 'lrelu':
-            self.activation = nn.LeakyReLU(0.2, inplace=False)
+            self.act = nn.LeakyReLU(0.2, inplace=False)
         elif activation == 'tanh':
-            self.activation = nn.Tanh()
+            self.act = nn.Tanh()
         elif activation == 'none':
-            self.activation = None
+            self.act = None
         else:
-            assert 0, "Unsupported activation: {}".format(activation)
+            raise ValueError(f"Unsupported activation: {activation}")
 
-        self.conv = nn.Conv2d(in_dim, out_dim, ks, st, bias=self.use_bias)
+        self.conv = nn.Conv2d(in_ch, out_ch, ks, stride, bias=self.use_bias)
 
     def forward(self, x):
-        if self.activation_first:
-            if self.activation:
-                x = self.activation(x)
+        if self.act_first:
+            if self.act:
+                x = self.act(x)
             x = self.conv(self.pad(x))
             if self.norm:
                 x = self.norm(x)
@@ -158,21 +153,21 @@ class Conv2dBlock(nn.Module):
             x = self.conv(self.pad(x))
             if self.norm:
                 x = self.norm(x)
-            if self.activation:
-                x = self.activation(x)
+            if self.act:
+                x = self.act(x)
         return x
 
 
 class AdaptiveInstanceNorm2d(nn.Module):
-    def __init__(self, num_features, eps=1e-5, momentum=0.1):
+    def __init__(self, n_features, eps=1e-5, momentum=0.1):
         super(AdaptiveInstanceNorm2d, self).__init__()
-        self.num_features = num_features
+        self.n_features = n_features
         self.eps = eps
         self.momentum = momentum
         self.weight = None
         self.bias = None
-        self.register_buffer('running_mean', torch.zeros(num_features))
-        self.register_buffer('running_var', torch.ones(num_features))
+        self.register_buffer('running_mean', torch.zeros(n_features))
+        self.register_buffer('running_var', torch.ones(n_features))
 
     def forward(self, x):
         assert self.weight is not None and \
@@ -187,4 +182,4 @@ class AdaptiveInstanceNorm2d(nn.Module):
         return out.view(b, c, *x.size()[2:])
 
     def __repr__(self):
-        return self.__class__.__name__ + '(' + str(self.num_features) + ')'
+        return self.__class__.__name__ + '(' + str(self.n_features) + ')'

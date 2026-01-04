@@ -2,125 +2,124 @@ import numpy as np
 import cv2
 
 
-def detect_text_bounds(image: np.array) -> (int, int):
+def detect_text_bounds(img: np.array) -> (int, int):
     """
     Find the lower and upper bounding lines in an image of a word
     """
-    if len(image.shape) >= 3 and image.shape[2] == 3:
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    elif len(image.shape) >= 3 and image.shape[2] == 1:
-        image = np.squeeze(image, axis=-1)
+    if len(img.shape) >= 3 and img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    elif len(img.shape) >= 3 and img.shape[2] == 1:
+        img = np.squeeze(img, axis=-1)
 
-    _, threshold = cv2.threshold(image, 0.8, 1, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(img, 0.8, 1, cv2.THRESH_BINARY_INV)
 
-    line_sums = np.sum(threshold, axis=1).astype(float)
-    line_sums = np.convolve(line_sums, np.ones(5) / 5, mode='same')
+    sums = np.sum(thresh, axis=1).astype(float)
+    sums = np.convolve(sums, np.ones(5) / 5, mode='same')
 
-    line_sums_d = np.diff(line_sums)
+    sums_d = np.diff(sums)
 
     std_factor = 0.5
-    min_threshold = np.mean(line_sums_d[line_sums_d <= 0]) - std_factor * np.std(line_sums_d[line_sums_d <= 0])
-    bottom_index = np.max(np.where(line_sums_d < min_threshold))
+    min_th = np.mean(sums_d[sums_d <= 0]) - std_factor * np.std(sums_d[sums_d <= 0])
+    bot_idx = np.max(np.where(sums_d < min_th))
 
-    max_threshold = np.mean(line_sums_d[line_sums_d >= 0]) + std_factor * np.std(line_sums_d[line_sums_d >= 0])
-    top_index = np.min(np.where(line_sums_d > max_threshold))
+    max_th = np.mean(sums_d[sums_d >= 0]) + std_factor * np.std(sums_d[sums_d >= 0])
+    top_idx = np.min(np.where(sums_d > max_th))
 
-    return bottom_index, top_index
-
-
-def dist(p_one, p_two) -> float:
-    return np.linalg.norm(p_two - p_one)
+    return bot_idx, top_idx
 
 
-def crop(image: np.array, ratio: float = None, pixels: int = None) -> np.array:
-    assert ratio is not None or pixels is not None, "Please specify either pixels or a ratio to crop"
+def dist(p1, p2) -> float:
+    return np.linalg.norm(p2 - p1)
 
-    width, height = image.shape[:2]
+
+def crop(img: np.array, ratio: float = None, px: int = None) -> np.array:
+    assert ratio is not None or px is not None, "Please specify either pixels or a ratio to crop"
+
+    w, h = img.shape[:2]
 
     if ratio is not None:
-
-        width_crop = int(ratio * width)
-        height_crop = int(ratio * height)
+        w_crop = int(ratio * w)
+        h_crop = int(ratio * h)
     else:
-        width_crop= pixels
-        height_crop = pixels
+        w_crop = px
+        h_crop = px
 
-    return image[height_crop:height-height_crop, width_crop:width-width_crop]
-
-
-def find_target_points(top_left, top_right, bottom_left, bottom_right):
-    max_width = max(int(dist(bottom_right, bottom_left)), int(dist(top_right, top_left)))
-    max_height = max(int(dist(top_right, bottom_right)), int(dist(top_left, bottom_left)))
-    destination_corners = [[0, 0], [max_width, 0], [max_width, max_height], [0, max_height]]
-
-    return order_points(destination_corners)
+    return img[h_crop:h-h_crop, w_crop:w-w_crop]
 
 
-def order_points(points: np.array) -> tuple:
+def find_target_points(tl, tr, bl, br):
+    max_w = max(int(dist(br, bl)), int(dist(tr, tl)))
+    max_h = max(int(dist(tr, br)), int(dist(tl, bl)))
+    dst_corners = [[0, 0], [max_w, 0], [max_w, max_h], [0, max_h]]
+
+    return order_points(dst_corners)
+
+
+def order_points(pts: np.array) -> tuple:
     """
     inspired by: https://learnopencv.com/automatic-document-scanner-using-opencv/
     """
-    sum = np.sum(points, axis=1)
-    top_left = points[np.argmin(sum)]
-    bottom_right = points[np.argmax(sum)]
+    s = np.sum(pts, axis=1)
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
 
-    diff = np.diff(points, axis=1)
-    top_right = points[np.argmin(diff)]
-    bottom_left = points[np.argmax(diff)]
+    diff = np.diff(pts, axis=1)
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
 
-    return top_left, top_right, bottom_left, bottom_right
+    return tl, tr, bl, br
 
 
-def get_page(image: np.array) -> np.array:
+def get_page(img: np.array) -> np.array:
     """
     inspired by: https://github.com/Kakaranish/OpenCV-paper-detection
     """
-    filtered = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    filtered = cv2.medianBlur(filtered, 11)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.medianBlur(gray, 11)
 
-    canny = cv2.Canny(filtered, 30, 50, 3)
-    contours, _ = cv2.findContours(canny, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    edges = cv2.Canny(gray, 30, 50, 3)
+    cnts, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
 
-    max_perimeter = 0
-    max_contour = None
-    for contour in contours:
-        contour = np.array(contour)
-        perimeter = cv2.arcLength(contour, True)
-        contour_approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+    max_peri = 0
+    max_cnt = None
+    for cnt in cnts:
+        cnt = np.array(cnt)
+        peri = cv2.arcLength(cnt, True)
+        cnt_approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
 
-        if perimeter > max_perimeter and cv2.isContourConvex(contour_approx) and len(contour_approx) == 4:
-            max_perimeter = perimeter
-            max_contour = contour_approx
+        if peri > max_peri and cv2.isContourConvex(cnt_approx) and len(cnt_approx) == 4:
+            max_peri = peri
+            max_cnt = cnt_approx
 
-    if max_contour is not None:
-        max_contour = np.squeeze(max_contour)
-        points = order_points(max_contour)
+    if max_cnt is not None:
+        max_cnt = np.squeeze(max_cnt)
+        pts = order_points(max_cnt)
 
-        target_points = find_target_points(*points)
-        M = cv2.getPerspectiveTransform(np.float32(points), np.float32(target_points))
-        final = cv2.warpPerspective(image, M, (target_points[3][0], target_points[3][1]), flags=cv2.INTER_LINEAR)
-        final = crop(final, pixels=10)
-        return final
+        tgt_pts = find_target_points(*pts)
+        M = cv2.getPerspectiveTransform(np.float32(pts), np.float32(tgt_pts))
+        warped = cv2.warpPerspective(img, M, (tgt_pts[3][0], tgt_pts[3][1]), flags=cv2.INTER_LINEAR)
+        warped = crop(warped, px=10)
+        return warped
 
-    return image
+    return img
 
 
-def get_words(page: np.array, dilation_size: int = 3):
+def get_words(page: np.array, dil_size: int = 3):
     gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
-    _, thresholded = cv2.threshold(gray, 125, 1, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(gray, 125, 1, cv2.THRESH_BINARY_INV)
 
-    dilation_size = dilation_size
-    element = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dilation_size + 1, 2 * dilation_size + 1),
-                                       (dilation_size, dilation_size))
-    thresholded = cv2.dilate(thresholded, element, iterations=3)
+    dil_size = dil_size
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * dil_size + 1, 2 * dil_size + 1),
+                                       (dil_size, dil_size))
+    thresh = cv2.dilate(thresh, kernel, iterations=3)
 
-    contours, _ = cv2.findContours(thresholded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    cnts, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
 
     words = []
     boxes = []
 
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
+    for cnt in cnts:
+        x, y, w, h = cv2.boundingRect(cnt)
         ratio = w / h
         if ratio <= 0.1 or ratio >= 10.0:
             continue

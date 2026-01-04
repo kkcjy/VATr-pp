@@ -14,59 +14,72 @@ def generate_ocr(args):
     """
     Generate OCR training data. Words generated are from given text generator.
     """
-    dataset = CollectionTextDataset(
-        args.dataset, 'files', TextDataset, file_suffix=args.file_suffix, num_examples=args.num_examples,
-        collator_resolution=args.resolution, validation=True
+    ds = CollectionTextDataset(
+        args.dataset, 'files', TextDataset, 
+        file_suffix=args.file_suffix, 
+        num_examples=args.num_examples,
+        collator_resolution=args.resolution, 
+        validation=True
     )
-    args.num_writers = dataset.num_writers
+    args.num_writers = ds.num_writers
 
-    writer = Writer(args.checkpoint, args, only_generator=True)
+    gen = Writer(args.checkpoint, args, only_generator=True)
+    text_gen = get_generator(args)
 
-    generator = get_generator(args)
+    gen.generate_ocr(
+        ds, 
+        args.count, 
+        interp_style=args.interp_styles, 
+        out_dir=args.output, 
+        text_gen=text_gen
+    )
 
-    writer.generate_ocr(dataset, args.count, interpolate_style=args.interp_styles, output_folder=args.output, text_generator=generator)
 
-
-def generate_ocr_reference(args):
+def generate_ocr_ref(args):
     """
     Generate OCR training data. Words generated are words from given dataset. Reference words are also saved.
     """
-    dataset = CollectionTextDataset(
-        args.dataset, 'files', TextDataset, file_suffix=args.file_suffix, num_examples=args.num_examples,
-        collator_resolution=args.resolution, validation=True
+    ds = CollectionTextDataset(
+        args.dataset, 'files', TextDataset, 
+        file_suffix=args.file_suffix, 
+        num_examples=args.num_examples,
+        collator_resolution=args.resolution, 
+        validation=True
     )
 
-    #dataset = FidDataset(get_dataset_path(args.dataset, 32, args.file_suffix, 'files'), mode='test', collator_resolution=args.resolution)
+    args.num_writers = ds.num_writers
+    gen = Writer(args.checkpoint, args, only_generator=True)
 
-    args.num_writers = dataset.num_writers
-
-    writer = Writer(args.checkpoint, args, only_generator=True)
-
-    writer.generate_ocr(dataset, args.count, interpolate_style=args.interp_styles, output_folder=args.output, long_tail=args.long_tail)
+    gen.generate_ocr(
+        ds, 
+        args.count, 
+        interp_style=args.interp_styles, 
+        out_dir=args.output, 
+        long_tail=args.long_tail
+    )
 
 
 def generate_ocr_msgpack(args):
     """
     Generate OCR dataset. Words generated are specified in given msgpack file
     """
-    dataset = FolderDataset(args.dataset_path)
+    ds = FolderDataset(args.dataset_path)
     args.num_writers = 339
 
     if args.charset_file:
         charset = msgpack.load(open(args.charset_file, 'rb'), use_list=False, strict_map_key=False)
         args.alphabet = "".join(charset['char2idx'].keys())
 
-    writer = Writer(args.checkpoint, args, only_generator=True)
-
+    gen = Writer(args.checkpoint, args, only_generator=True)
     lines = msgpack.load(open(args.text_path, 'rb'), use_list=False)
 
-    print(f"Generating {len(lines)} to {args.output}")
+    print(f"生成 {len(lines)} 到 {args.output}")
 
-    for i, (filename, target) in enumerate(lines):
-        if not os.path.exists(os.path.join(args.output, filename)):
-            style = torch.unsqueeze(dataset.sample_style()['simg'], dim=0).to(args.device)
-            fake = writer.create_fake_sentence(style, target, at_once=True)
+    for i, (fname, target) in enumerate(lines):
+        if not os.path.exists(os.path.join(args.output, fname)):
+            style = torch.unsqueeze(ds.sample_style()['simg'], dim=0).to(args.device)
+            fake = gen.create_fake_sentence(style, target, at_once=True)
 
-            cv2.imwrite(os.path.join(args.output, filename), fake)
+            cv2.imwrite(os.path.join(args.output, fname), fake)
 
-    print(f"Done")
+    print("完成")

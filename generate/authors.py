@@ -9,40 +9,67 @@ from generate.util import stack_lines
 from generate.writer import Writer
 
 
-def generate_authors(args):
-    dataset = CollectionTextDataset(
-        args.dataset, 'files', TextDataset, file_suffix=args.file_suffix, num_examples=args.num_examples,
-        collator_resolution=args.resolution, validation=args.test_set
+def generate_authors(arguments):
+    # 加载数据集
+    author_dataset = CollectionTextDataset(
+        arguments.dataset, 
+        'files', 
+        TextDataset, 
+        file_suffix=arguments.file_suffix, 
+        num_examples=arguments.num_examples,
+        collator_resolution=arguments.resolution, 
+        validation=arguments.test_set
     )
 
-    args.num_writers = dataset.num_writers
+    arguments.num_writers = author_dataset.num_writers
 
-    writer = Writer(args.checkpoint, args, only_generator=True)
+    # 初始化生成器
+    style_generator = Writer(arguments.checkpoint, arguments, only_generator=True)
 
-    if args.text.endswith(".txt"):
-        with open(args.text, 'r') as f:
-            lines = [l.rstrip() for l in f]
+    # 读取文本内容
+    if arguments.text.endswith(".txt"):
+        with open(arguments.text, 'r') as text_file:
+            input_lines = [line.rstrip() for line in text_file]
     else:
-        lines = [args.text]
+        input_lines = [arguments.text]
 
-    output_dir = "saved_images/author_samples/"
-    if os.path.exists(output_dir):
-        shutil.rmtree(output_dir)
-    os.mkdir(output_dir)
+    # 创建输出目录
+    output_directory = "saved_images/author_samples/"
+    if os.path.exists(output_directory):
+        shutil.rmtree(output_directory)
+    os.makedirs(output_directory)
 
-    fakes, author_ids, style_images = writer.generate_authors(lines, dataset, args.align, args.at_once)
+    # 生成作者风格图像
+    generated_images, author_identifiers, reference_styles = style_generator.generate_authors(
+        input_lines, 
+        author_dataset, 
+        arguments.align, 
+        arguments.at_once
+    )
 
-    for fake, author_id, style in zip(fakes, author_ids, style_images):
-        author_dir = os.path.join(output_dir, str(author_id))
-        os.mkdir(author_dir)
+    # 保存生成的图像
+    for batch_images, author_id, style_references in zip(generated_images, author_identifiers, reference_styles):
+        author_output_dir = os.path.join(output_directory, str(author_id))
+        os.makedirs(author_output_dir)
 
-        for i, line in enumerate(fake):
-            cv2.imwrite(os.path.join(author_dir, f"line_{i}.png"), line)
+        # 保存每一行生成的图像
+        for line_index, line_image in enumerate(batch_images):
+            cv2.imwrite(
+                os.path.join(author_output_dir, f"line_{line_index}.png"), 
+                line_image
+            )
 
-        total = stack_lines(fake)
-        cv2.imwrite(os.path.join(author_dir, "total.png"), total)
+        # 合并所有行并保存
+        combined_image = stack_lines(batch_images)
+        cv2.imwrite(
+            os.path.join(author_output_dir, "combined.png"), 
+            combined_image
+        )
 
-        if args.output_style:
-            for i, image in enumerate(style):
-                cv2.imwrite(os.path.join(author_dir, f"style_{i}.png"), image)
-
+        # 保存参考风格图像（如果需要）
+        if arguments.output_style:
+            for style_index, style_image in enumerate(style_references):
+                cv2.imwrite(
+                    os.path.join(author_output_dir, f"style_reference_{style_index}.png"), 
+                    style_image
+                )
